@@ -58,15 +58,24 @@ DL_PAUSE_TIME = 1.0 #Wait time between downloads
 class Manifest:
     def __init__(self):
         self.gif_list = set()
+        self.number_new_gifs = 0
 
     def __add__(self, other):
         self.gif_list.add(other)
+        if not other.local_file_found:
+            self.number_new_gifs += 1
 
     def __contains__(self, item):
         for gif in self.gif_list:
-            if gif.name == item.name:
+            if gif.name == item:
                 return True
         return False
+
+    def get_total_gifs(self):
+        return len(self.gif_list)
+
+    def get_new_gifs(self):
+        return self.number_new_gifs
 
 
 class Gif:
@@ -79,6 +88,7 @@ class Gif:
         self.url = url
         self.is_crosspost = xpost
         self.local_file_found = local_file_found
+        # Backup is Null if none avaliable
 
     def display(self):
         cross = "No"
@@ -90,11 +100,13 @@ class Gif:
               f"FileType: {self.format}\n"
               f"URL: {self.url}\n"
               f"Crosspost: {cross}\n"
-              f"Already Downloaded: {self.local_file_found}")
+              f"Already Downloaded: {self.local_file_found}"
+              )
+
 
     def new_gif_from_web(raw_url):
         cross = False
-        regex = re.compile("http[s]?://*.*/")
+        regex = re.compile("https?://.*/")
         site = regex.match(raw_url).group()
         clean_url = raw_url.split("#")[0].split("?")[0].strip()
         base_info = clean_url.lower().split("/")[-1].split(".")
@@ -134,6 +146,53 @@ class Gif:
         clean_url = site + "/media/" + clean_name + "/giphy.gif"
         return Gif(clean_name, gif_format, site, clean_url, cross, False)
 
+    def new_dash_gif(dash_url):
+        if dash_url == "":
+            return None
+        elif dash_url is None:
+            print("Error: Could not find Dash Video URL")
+            quit()
+        site = "reddit"
+        clean_name = dash_url.split("/")[2]
+        if "gif" in dash_url:
+            gif_format = "gif"
+        elif "mp4" in dash_url:
+            gif_format = "mp4"
+        cross = False
+        clean_url = dash_url
+        return Gif(clean_name, gif_format, site, clean_url, cross, False)
+
+
+def find_link_with_sound(url):
+    sub_driver = webdriver.Chrome()
+    sub_driver.get("https://reddit.com")
+    sub_driver.get(url)
+    final_video = ""
+    player_elements = driver.find_elements(By.XPATH, "//shreddit-player")
+    for element in player_elements:
+        if element is not None:
+            media_json = element.get_attribute("packaged-media-json")
+            all_videos = []
+            if media_json is not None:
+                highest_quality = 0
+                url_pattern = re.compile("https?://packaged-media.redd.it/[a-zA-Z0-9=/\-_\.?&]*")
+                for item in re.findall(url_pattern, media_json):
+                    if item is not None:
+                        all_videos.append(str(item))
+                        quality_pattern = re.compile("[0-9]+p")
+                        quality_result = re.search(quality_pattern, item)
+                        if quality_result is not None:
+                            quality = int(quality_result.group().strip("p"))
+                            if quality > highest_quality:
+                                highest_quality = quality
+                if len(all_videos) == 0:
+                    print("Video not found")
+                    continue
+                for item in all_videos:
+                    if str(highest_quality) in item:
+                        final_video = item
+
+    return final_video
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -228,29 +287,60 @@ if __name__ == "__main__":
     page = 0
     new_urls = set()
     cross_posts = set()
+    video_lst = []
+    backup_videos = []
     while page <= MAX_PAGE_SCROLL:
-        web_elements = driver.find_elements(By.XPATH, "//shreddit-post")
-        for element in web_elements:
-            raw_url = (element.get_attribute("content-href"))
-            print("testing get request: " + raw_url)
-            if "/r/" in raw_url:
-                cross_posts.add(raw_url)
-                continue
-            # print("DEBUG: Raw urls: " + str(raw_url))
-            elif "giphy" in raw_url:
-                working_gif = Gif.new_gif_from_giphy(raw_url)
-            else:
-                working_gif = Gif.new_gif_from_web(raw_url)
-            if working_gif not in manifest:
-                if DEBUG:
-                    print("DEBUG: Found New URL: " + working_gif.url)
-                manifest.__add__(working_gif)
-                file_count += 1
+        player_elements = driver.find_elements(By.XPATH, "//shreddit-player")
+        for element in player_elements:
+            if element is not None:
+                final_video = ""
+                test = element.get_attribute("packaged-media-json")
+                all_videos = []
+                if test is not None:
+                    highest_quality = 0
+                    url_pattern = re.compile("https?://packaged-media.redd.it/[a-zA-Z0-9=/\-_\.?&]*")
+                    for item in re.findall(url_pattern, test):
+                        if item is not None:
+                            all_videos.append(str(item))
+                            quality_pattern = re.compile("[0-9]+p")
+                            quality_result = re.search(quality_pattern, item)
+                            if quality_result is not None:
+                                quality = int(quality_result.group().strip("p"))
+                                if quality > highest_quality:
+                                    highest_quality = quality
+                    if len(all_videos) == 0:
+                        print("Video not found")
+                        continue
+                    for item in all_videos:
+                        if str(highest_quality) in item:
+                            final_video = item
+                dash_gif = Gif.new_dash_gif(final_video)
+                if dash_gif is not None:
+                    manifest.__add__(dash_gif)
+        # web_elements = driver.find_elements(By.XPATH, "//shreddit-post")
+        # for element in web_elements:
+        #     raw_url = (element.get_attribute("content-href"))
+        #     if "/r/" in raw_url:
+        #         cross_posts.add(raw_url)
+        #         continue
+        #     # print("DEBUG: Raw urls: " + str(raw_url))
+        #     elif "giphy" in raw_url:
+        #         working_gif = Gif.new_gif_from_giphy(raw_url)
+        #     else:
+        #         working_gif = Gif.new_gif_from_web(raw_url)
+        #     if working_gif not in manifest:
+        #         if DEBUG:
+        #             print("DEBUG: Found New URL: " + working_gif.url)
+        #         manifest.__add__(working_gif)
+        #         file_count += 1
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         sleep(SCROLL_PAUSE_TIME)
         page += 1
 
-    # Cleaning up cross posts by tracking down the real page
+    # Create a backup list from posts and check that we didnt miss any gifs
+
+
+# Cleaning up cross posts by tracking down the real page
     if XPOST:
         print("Tracking down cross posts...")
         if DEBUG:
@@ -271,6 +361,7 @@ if __name__ == "__main__":
 
                         manifest.__add__(working_gif)
                         file_count += 1
+
     api = redgifs.API()
     api.login()
     if DRY_RUN:
@@ -291,7 +382,7 @@ if __name__ == "__main__":
             for gif in manifest.gif_list:
                 if not gif.local_file_found:
                     url = gif.url
-                    if "i.redd.it" in url or "giphy" in url:
+                    if "media.redd.it" in url or "giphy" in url:
                         subprocess.run(["wget", "--progress=bar:force", "--no-verbose", url])
                         sleep(DL_PAUSE_TIME)
                     if "redgifs" in url:
